@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Data.Entity;
-using System.Data.Entity.Migrations;
 using System.Linq;
 using SharedLibs.DataContracts;
 using SharedLibs.Enums;
@@ -19,7 +18,7 @@ namespace ServiceBus
         {
             try
             {
-                using (var context = new ServiceBusDatabaseEntities())
+                using (var context = new EntityModels.ServiceBusDatabaseEntities())
                 {
                     var product = context.Products.FirstOrDefault(p => p.Id == guid);
 
@@ -36,7 +35,7 @@ namespace ServiceBus
                         Result = SharedLibs.DataContracts.Result.SuccessFormat("Product {0} found", guid),
                         ID = guid,
                         Name = product.Name,
-                        Price = product.Price
+                        Price = product.Price.HasValue ? product.Price.Value : 0.0
                     };
                 }
             }
@@ -57,7 +56,7 @@ namespace ServiceBus
         {
             try
             {
-                using (var context = new ServiceBusDatabaseEntities())
+                using (var context = new EntityModels.ServiceBusDatabaseEntities())
                 {
                     var returnCollection = new List<SharedLibs.DataContracts.Product>();
 
@@ -67,7 +66,7 @@ namespace ServiceBus
                         {
                             ID = product.Id,
                             Name = product.Name,
-                            Price = product.Price
+                            Price = product.Price.HasValue ? product.Price.Value : 0.0
                         });
                     }
 
@@ -108,12 +107,12 @@ namespace ServiceBus
         {
             try
             {
-                if ((!String.IsNullOrWhiteSpace(name) && name.Length <= 50) && price >= 0)
+                if ((!string.IsNullOrWhiteSpace(name) && name.Length <= 50) && price >= 0)
                 {
-                    using (var context = new ServiceBusDatabaseEntities())
+                    using (var context = new EntityModels.ServiceBusDatabaseEntities())
                     {
 
-                        context.Products.Add(new Product() { Id = guid, Name = name, Price = price});
+                        context.Products.Add(new EntityModels.Product() { Id = guid, Name = name, Price = price});
                         context.SaveChanges();
 
                         return Result.SuccessFormat("Product {0} | {1} has been added", guid, name);
@@ -141,71 +140,59 @@ namespace ServiceBus
         public SharedLibs.DataContracts.Product EditProduct(Guid guid, string name, double price)
         {
             try
-            {   //TODO: Do I have to create an objcet of the service like this one in case I do want to use a method GetProduct? //simplify
-                var service = new ProductServiceProxyClass.ProductServiceClient();
-                var changesName = false;
-                var changesPrice = false;
-
-                var originalProduct = service.GetProduct(guid);
+            {
+                var originalProduct = GetProduct(guid);
 
                 if (originalProduct.Result.ResultType == ResultType.Success)
                 {
-                    var editableProduct = new Product()
+                    var editableProduct = new EntityModels.Product()
                     {
                         Id = originalProduct.ID,
                         Name = originalProduct.Name,
                         Price = originalProduct.Price
                     };
 
-                    if (!String.IsNullOrWhiteSpace(name) && name.Length <= 50 && name != editableProduct.Name)
+                    using (var context = new EntityModels.ServiceBusDatabaseEntities())
                     {
-                        changesName = true;
-                    }
+                        context.Products.Attach(editableProduct);
 
-                    if (price != editableProduct.Price && price >= 0)
-                    {
-                        changesPrice = true;
-                    }
-
-                    if (changesName || changesPrice)
-                    {
-                        using (var context = new ServiceBusDatabaseEntities())
+                        //is new name valid and different than the stored one?
+                        if (!String.IsNullOrWhiteSpace(name) && name.Length <= 50 && name != editableProduct.Name)
                         {
-                            //TODO In case of more columns find a way to simplify this! 21.10.2016
-                            if (changesName)
-                            {
-                                editableProduct.Name = name;
-                            }
-                            if (changesPrice)
-                            {
-                                editableProduct.Price = price;
-                            }
-                            //context.Products.Attach(editableProduct);
-                            //Since there are only few columns I would prefer this
-                            context.Entry(editableProduct).State = EntityState.Modified;
-                            context.SaveChanges();
+                            editableProduct.Name = name;
                         }
 
-                        return new SharedLibs.DataContracts.Product()
+                        //is price valid and different from the stored one?
+                        if (price != editableProduct.Price && price >= 0)
                         {
-                            ID = editableProduct.Id,
-                            Name = editableProduct.Name,
-                            Price = editableProduct.Price,
-                            Result = Result.Success()
-                        };
+                            editableProduct.Price = price;
+                        }
+
+                        //No changes? No need to update
+                        if (context.Entry(editableProduct).State == EntityState.Unchanged)
+                        {
+                            originalProduct.Result = Result.WarningFormat("Product {0} was not modified.", originalProduct.ID);
+                            return originalProduct;
+                        }
+                        //Otherwise update db and return what you should return
+                        else
+                        {
+                            context.SaveChanges();
+                            return new SharedLibs.DataContracts.Product()
+                            {
+                                ID = editableProduct.Id,
+                                Name = editableProduct.Name,
+                                Price = editableProduct.Price.HasValue ? editableProduct.Price.Value : 0.0,
+                                Result = Result.Success()
+                            };
+                        }
                     }
-                    else
-                    {
-                        originalProduct.Result = Result.Warning("This product was not modified.");
-                        return originalProduct;
-                    }
+
                 }
                 else
                 {
-                    originalProduct.Result = Result.Error("This product was not found.");
                     return originalProduct;
                 }
-
             }
             catch (Exception exception)
             {
@@ -225,8 +212,8 @@ namespace ServiceBus
         public Result DeleteProduct(Guid guid)
         {
             try
-            {   //TODO : With more complex table structure this should do something like "UPDATE db.Product SET isValid = 0 where db.Product.ID = guid and isValid = 1". Now it is fine as is.
-                using (var context = new ServiceBusDatabaseEntities())
+            {   
+                using (var context = new EntityModels.ServiceBusDatabaseEntities())
                 {
                     var product = context.Products.FirstOrDefault(p => p.Id == guid);
 
